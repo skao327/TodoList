@@ -87,7 +87,7 @@ class Todo:
         self.task_listbox.delete(0, tk.END)
         self.listbox_task_ids.clear()
         try:
-            self.cursor.execute("SELECT id, task, completed FROM todolists ORDER BY sort_order ASC, id ASC")
+            self.cursor.execute("SELECT id, task, completed FROM todolists ORDER BY completed ASC, id ASC")
             for row in self.cursor.fetchall():
                 task_id, task_text, completed_status = row
                 prefix = self.CHECKED if completed_status else self.UNCHECKED
@@ -245,18 +245,3 @@ if __name__ == '__main__':
     root = tk.Tk()
     app = Todo(root)
     root.mainloop()
-
-#gui 구성
-"""
-delete_button=tk.Button(root,text="삭제",width=10)
-delete_button.pack(pady=5)
-
-complete_button=tk.Button(root,text="완료",width=10, command=toggle_complete)
-complete_button.pack(pady=5)
-
-load_tasks()
-
-root.mainloop()
-
-conn.close()
-"""
