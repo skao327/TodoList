@@ -2,6 +2,8 @@ import tkinter as tk
 import mysql.connector
 from tkinter import messagebox, simpledialog
 from datetime import datetime, date
+import traceback
+import sys
 
 class Todo:
 
@@ -20,7 +22,15 @@ class Todo:
             password="mypass123",
             database="todo_db"
         )
-        self.conn = mysql.connector.connect(**self.dbinfo)
+        try:
+            self.conn = mysql.connector.connect(use_pure=True, **self.dbinfo)
+        except Exception as err:
+            print("❌ MySQL 연결 중 예외 발생:")
+            import traceback
+            traceback.print_exc()
+            from tkinter import messagebox
+            messagebox.showerror("DB 연결 실패", str(err))
+            raise
         self.cursor = self.conn.cursor()
         self.cursor.execute("SELECT DATABASE();")
         print(self.cursor.fetchone())
@@ -323,4 +333,6 @@ if __name__ == '__main__':
         app = Todo(root)
         root.mainloop()
     except Exception as e:
+        print(f"앱 실행 중 오류 발생 : {e}")
+        traceback.print_exc()
         sys.exit(1)
