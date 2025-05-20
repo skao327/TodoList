@@ -337,4 +337,3 @@ if __name__ == '__main__':
         print(f"앱 실행 중 오류 발생: {e}")
         traceback.print_exc()
         sys.exit(1)
-
