@@ -1,4 +1,3 @@
-
 import tkinter as tk
 import traceback
 import mysql.connector
