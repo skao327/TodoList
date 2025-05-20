@@ -3,6 +3,7 @@ import mysql.connector
 from tkinter import messagebox, simpledialog
 from datetime import datetime, date
 import traceback
+import sys
 
 class Todo:
 
@@ -332,4 +333,6 @@ if __name__ == '__main__':
         app = Todo(root)
         root.mainloop()
     except Exception as e:
+        print(f"앱 실행 중 오류 발생 : {e}")
+        traceback.print_exc()
         sys.exit(1)
