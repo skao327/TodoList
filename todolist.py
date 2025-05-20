@@ -1,6 +1,9 @@
 import tkinter as tk
-import sqlite3
-from tkinter import messagebox
+import traceback
+import mysql.connector
+from tkinter import messagebox, simpledialog
+from datetime import datetime, date
+import sys
 
 class Todo:
 
@@ -10,7 +13,7 @@ class Todo:
     def __init__(self, root):
         self.root = root
         root.title("To-do List") #맨 위에 제목("To-do List")
-        root.geometry("500x600") #사이즈 약간 넓게 조정
+        root.geometry("600x600") #사이즈 약간 넓게 조정
 
         #db세팅
         self.dbinfo = dict(
@@ -19,25 +22,29 @@ class Todo:
             password="mypass123",
             database="todo_db"
         )
-        self.conn = sqlite3.connect("todo.db")
+        try:
+            self.conn = mysql.connector.connect(use_pure=True, **self.dbinfo)
+        except Exception as err:
+            print("❌ MySQL 연결 중 예외 발생:")
+            import traceback
+            traceback.print_exc()
+            from tkinter import messagebox
+            messagebox.showerror("DB 연결 실패", str(err))
+            raise
+
         self.cursor = self.conn.cursor()
-        
+        self.cursor.execute("SELECT DATABASE();")
         print(self.cursor.fetchone())
 
         self.cursor.execute("""
-    CREATE TABLE IF NOT EXISTS todolists (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task TEXT NOT NULL,
-        completed INTEGER NOT NULL DEFAULT 0,
-        sort_order INTEGER NOT NULL DEFAULT 0,
-        priority INTEGER NOT NULL DEFAULT 5 
-    )
-""") #기본값 5로 지정
-        try:
-            self.cursor.execute("ALTER TABLE todolists ADD COLUMN sort_order INT NOT NULL DEFAULT 0")
-            self.conn.commit()
-        except Exception:
-            pass
+            CREATE TABLE IF NOT EXISTS todolists (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                task VARCHAR(255) NOT NULL,
+                completed TINYINT(1) NOT NULL DEFAULT 0,
+                sort_order INT NOT NULL DEFAULT 0,
+                due_date DATE DEFAULT NULL
+            )
+        """)
 
         self.listbox_task_ids = []
         self.deleted_item_stack = []
@@ -49,12 +56,22 @@ class Todo:
 
     def setup_gui(self):
         # 입력창
-        self.task_entry = tk.Entry(self.root, width=40)
-        self.priority_entry = tk.Entry(self.root, width=5)
-        self.priority_entry.pack()
-        self.priority_entry.insert(0, "5")
+        input_outer_frame = tk.Frame(self.root)
+        input_outer_frame.pack(pady = (15, 5))
+        
+        input_task_frame = tk.Frame(input_outer_frame)
+        input_task_frame.pack(pady=2)
+        tk.Label(input_task_frame, text="할 일: ").pack(side=tk.LEFT, padx=(0, 5))
+        self.task_entry = tk.Entry(input_task_frame, width=40)
         self.task_entry.pack(pady=(15,5))
         self.task_entry.bind("<Return>", self.add_task)
+        
+        input_due_date_frame = tk.Frame(input_outer_frame)
+        input_due_date_frame.pack(pady=2)
+        tk.Label(input_due_date_frame, text="마감기한(YYYY-MM-DD): ").pack(side=tk.LEFT, padx=(0,5))
+        self.due_date_entry = tk.Entry(input_due_date_frame, width=15)
+        self.due_date_entry.pack(side=tk.LEFT)
+        self.due_date_entry.bind("<Return>", self.add_task)
 
         # 버튼 1줄: 추가/삭제/복구/새로고침
         button_frame = tk.Frame(self.root)
@@ -69,13 +86,15 @@ class Todo:
         self.refresh_button = tk.Button(button_frame, text="새로고침", width=8, command=self.force_refresh)
         self.refresh_button.pack(side=tk.LEFT, padx=2)
 
-        # 버튼 2줄: 순서 이동
-        order_frame = tk.Frame(self.root)
-        order_frame.pack(pady=3)
-        self.up_button = tk.Button(order_frame, text="↑ 위로", width=8, command=self.move_up)
+        # 버튼 2줄: 순서 이동 + 마감기한 설정
+        button_frame2 = tk.Frame(self.root)
+        button_frame2.pack(pady=3)
+        self.up_button = tk.Button(button_frame2, text="↑ 위로", width=8, command=self.move_up)
         self.up_button.pack(side=tk.LEFT, padx=2)
-        self.down_button = tk.Button(order_frame, text="↓ 아래로", width=8, command=self.move_down)
+        self.down_button = tk.Button(button_frame2, text="↓ 아래로", width=8, command=self.move_down)
         self.down_button.pack(side=tk.LEFT, padx=2)
+        self.set_due_date_button = tk.Button(button_frame2, text="기한변경", width=8, command=self.set_due_date_for_selected)
+        self.set_due_date_button.pack(side=tk.LEFT, padx=2)
 
         # 리스트박스
         list_frame = tk.Frame(self.root)
@@ -91,23 +110,28 @@ class Todo:
         self.task_listbox.delete(0, tk.END)
         self.listbox_task_ids.clear()
         try:
-            self.cursor.execute("""
-            SELECT id, task, completed, priority FROM todolists
-            ORDER BY priority ASC, sort_order ASC
-        """)
+            self.cursor.execute("SELECT id, task, completed, due_date FROM todolists ORDER BY completed ASC, CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, id ASC")
             for row in self.cursor.fetchall():
-                task_id, task_text, completed_status, priority = row
+                task_id, task_text, completed_status, due_date = row
                 prefix = self.CHECKED if completed_status else self.UNCHECKED
-                display_text = f"[{priority}] {prefix}{task_text}"
+                due_date_str = ""
+                if due_date:
+                    due_date_str = f"(기한: {due_date.strftime('%Y-%m-%d')})"
+                display_text = f"{prefix} {task_text} {due_date_str}"
                 self.task_listbox.insert(tk.END, display_text)
                 self.listbox_task_ids.append(task_id)
                 if completed_status:
                     self.task_listbox.itemconfig(tk.END, {'fg': 'gray'})
-                elif priority <= 2:
-                    self.task_listbox.itemconfig(tk.END, {'fg': 'red'})
+                elif due_date:
+                    today = date.today()
+                    if due_date < today:
+                        self.task_listbox.itemconfig(tk.END, {'fg': 'darkred'})
+                        display_text += "   (기한 지남)"
+                    elif due_date == today:
+                        self.task_listbox.itemconfig(tk.END, {'fg': 'red'})
                 else:
                     self.task_listbox.itemconfig(tk.END, {'fg': 'black'})
-        except sqlite3.Error as e:
+        except mysql.connector.Error as e:
             messagebox.showerror("DB 오류", f"할 일 목록을 불러오는 중 오류 발생: {e}")
 
     def force_refresh(self):
@@ -116,33 +140,80 @@ class Todo:
             self.conn.close()
         except:
             pass
-        self.conn = sqlite3.connect(**self.dbinfo)
+        self.conn = mysql.connector.connect(**self.dbinfo)
         self.cursor = self.conn.cursor()
         self.display_tasks()
         self.root.update_idletasks()
 
     def add_task(self, event=None):
         task = self.task_entry.get()
+        due_date_str = self.due_date_entry.get()
+        if not task:
+            messagebox.showwarning("경고", "할 일을 입력해주세요.")
+            return
+        
+        due_date_obj = None
+        if due_date_str.strip():
+            try: due_date_obj = datetime.strptime(due_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                messagebox.showwarning("경고", "마감기한 형식이 잘못되었습니다. (YYYY-MM-DD)")
+                return
         try:
-            priority=int(self.priority_entry.get())
-        except ValueError:
-            messagebox.showwarning("경고","우선순위는 정수로 입력하세요.")
+            self.cursor.execute("SELECT IFNULL(MAX(sort_order), 0) FROM todolists")
+            max_order = self.cursor.fetchone()[0]
+            self.cursor.execute("INSERT INTO todolists (task, sort_order, due_date) VALUES (%s, %s, %s)", (task, max_order + 1, due_date_obj))
+            self.conn.commit()
+            print(f"할 일 추가: {task}, 마감기한: {due_date_obj}")
+            self.task_entry.delete(0, tk.END)
+            self.due_date_entry.delete(0, tk.END)
+            self.display_tasks()
+        except mysql.connector.Error as e:
+            messagebox.showerror("DB 오류", f"할 일 추가 중 오류 발생: {e}")
+        
+        
+    def set_due_date_for_selected(self):
+        selected_indices = self.task_listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("경고", "마감기한을 변경할 항목을 선택해주세요.")
             return
 
-        if task:
+        # 첫 번째 선택된 항목의 현재 마감기한을 가져와서 다이얼로그 기본값으로 사용 (선택적)
+        first_selected_idx = selected_indices[0]
+        task_id_to_get_current_due = self.listbox_task_ids[first_selected_idx]
+        initial_due_date_str = ""
+        try:
+            self.cursor.execute("SELECT due_date FROM todolists WHERE id = %s", (task_id_to_get_current_due,))
+            current_due_date_db = self.cursor.fetchone()
+            if current_due_date_db and current_due_date_db[0]:
+                initial_due_date_str = current_due_date_db[0].strftime('%Y-%m-%d')
+        except mysql.connector.Error as e:
+            print(f"현재 마감기한 조회 중 오류: {e}") # 오류 발생 시 기본값은 빈 문자열
+
+        # simpledialog를 사용하여 새 마감기한 입력받기
+        new_due_date_str = simpledialog.askstring("마감기한 변경",
+                                                  "새 마감기한을 입력하세요 (YYYY-MM-DD 형식).\n비우면 마감기한이 제거됩니다.",
+                                                  initialvalue=initial_due_date_str)
+
+        if new_due_date_str is None: # 사용자가 '취소'를 누른 경우
+            return
+
+        new_due_date_obj = None
+        if new_due_date_str.strip(): # 입력값이 있는 경우
             try:
-                self.cursor.execute("SELECT IFNULL(MAX(sort_order), 0) FROM todolists")
-                max_order = self.cursor.fetchone()[0]
-                self.cursor.execute("INSERT INTO todolists (task, sort_order, priority) VALUES (?, ?, ?)", (task, max_order + 1, priority))
-                self.conn.commit()
-                print(f"할 일 추가: {task} (우선순위 {priority})")
-                self.task_entry.delete(0, tk.END)
-                self.priority_entry.insert(0, "5")
-                self.display_tasks()
-            except sqlite3.connector.Error as e:
-                messagebox.showerror("DB 오류", f"할 일 추가 중 오류 발생: {e}")
-        else:
-            messagebox.showwarning("경고", "할 일을 입력해주세요.")
+                new_due_date_obj = datetime.strptime(new_due_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                messagebox.showerror("오류", "잘못된 날짜 형식입니다. (YYYY-MM-DD)")
+                return
+        # else: 입력값이 비어있으면 new_due_date_obj는 None으로 유지되어 마감기한 제거
+
+        try:
+            for index in selected_indices: # 선택된 모든 항목에 대해 마감기한 업데이트
+                task_id_to_update = self.listbox_task_ids[index]
+                self.cursor.execute("UPDATE todolists SET due_date = %s WHERE id = %s", (new_due_date_obj, task_id_to_update))
+            self.conn.commit()
+            self.display_tasks() # 변경사항 반영
+        except mysql.connector.Error as e:
+            messagebox.showerror("DB 오류", f"마감기한 업데이트 중 오류 발생: {e}")
 
     def delete_task(self):
         selected_indices = self.task_listbox.curselection()
@@ -150,13 +221,13 @@ class Todo:
             for index in sorted(selected_indices, reverse=True):
                 task_id = self.listbox_task_ids[index]
                 try:
-                    self.cursor.execute("SELECT id, task, completed, sort_order FROM todolists WHERE id=?", (task_id,))
+                    self.cursor.execute("SELECT id, task, completed, sort_order, due_date FROM todolists WHERE id=%s", (task_id,))
                     deleted_row = self.cursor.fetchone()
                     if deleted_row:
                         self.deleted_item_stack.append(deleted_row)
-                        self.cursor.execute("DELETE FROM todolists WHERE id=?", (task_id,))
+                        self.cursor.execute("DELETE FROM todolists WHERE id=%s", (task_id,))
                         self.conn.commit()
-                except sqlite3.Error as e:
+                except mysql.connector.Error as e:
                     messagebox.showerror("DB 오류", f"할 일 삭제 중 오류 발생: {e}")
             self._reorder_sort_orders()
             self.display_tasks()
@@ -166,14 +237,14 @@ class Todo:
     def undo_delete(self):
         if self.deleted_item_stack:
             last_deleted = self.deleted_item_stack.pop()
-            _, task, completed, _ = last_deleted
+            _, task, completed, _, due_date = last_deleted
             try:
                 self.cursor.execute("SELECT IFNULL(MAX(sort_order), 0) FROM todolists")
                 max_order = self.cursor.fetchone()[0]
-                self.cursor.execute("INSERT INTO todolists (task, completed, sort_order) VALUES (?, ?, ?)", (task, completed, max_order + 1))
+                self.cursor.execute("INSERT INTO todolists (task, completed, sort_order, due_date) VALUES (%s, %s, %s, %s)", (task, completed, max_order + 1, due_date))
                 self.conn.commit()
                 self.display_tasks()
-            except sqlite3.Error as e:
+            except mysql.connector.Error as e:
                 messagebox.showerror("DB 오류", f"삭제 복구 중 오류 발생: {e}")
         else:
             messagebox.showinfo("안내", "복구할 항목이 없습니다.")
@@ -185,7 +256,7 @@ class Todo:
         selected_listbox_index = selected[0]
         taskID_toTOGGLE = self.listbox_task_ids[selected_listbox_index]
         try:
-            self.cursor.execute("SELECT id, completed FROM todolists WHERE id=?", (taskID_toTOGGLE,))
+            self.cursor.execute("SELECT id, completed FROM todolists WHERE id=%s", (taskID_toTOGGLE,))
             result = self.cursor.fetchone()
             if result:
                 current_status = result[1]
@@ -195,7 +266,7 @@ class Todo:
                 self.display_tasks()
             else:
                 messagebox.showinfo("오류", "완료 처리할 항목을 선택해주세요.")
-        except sqlite3.Error as e:
+        except mysql.connector.Error as e:
             messagebox.showerror("DB 오류", f"완료 상태 변경 중 오류 발생:{e}")
 
     def move_up(self):
@@ -207,12 +278,12 @@ class Todo:
             return
         current_id = self.listbox_task_ids[idx]
         above_id = self.listbox_task_ids[idx - 1]
-        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=?", (current_id,))
+        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=", (current_id,))
         order1 = self.cursor.fetchone()[0]
-        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=?", (above_id,))
+        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s", (above_id,))
         order2 = self.cursor.fetchone()[0]
-        self.cursor.execute("UPDATE todolists SET sort_order=? WHERE id=?", (order2, current_id))
-        self.cursor.execute("UPDATE todolists SET sort_order=? WHERE id=?", (order1, above_id))
+        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (order2, current_id))
+        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (order1, above_id))
         self.conn.commit()
         self.display_tasks()
         self.task_listbox.selection_clear(0, tk.END)
@@ -259,6 +330,11 @@ class Todo:
 
 if __name__ == '__main__':
     root = tk.Tk()
-    app = Todo(root)
-    root.mainloop()
+    try:
+        app = Todo(root)
+        root.mainloop()
+    except Exception as e:
+        print(f"앱 실행 중 오류 발생: {e}")
+        traceback.print_exc()
+        sys.exit(1)
 
