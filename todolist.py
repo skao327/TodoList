@@ -1,7 +1,10 @@
+
 import tkinter as tk
+import traceback
 import mysql.connector
 from tkinter import messagebox, simpledialog
 from datetime import datetime, date
+import sys
 
 class Todo:
 
@@ -20,7 +23,16 @@ class Todo:
             password="mypass123",
             database="todo_db"
         )
-        self.conn = mysql.connector.connect(**self.dbinfo)
+        try:
+            self.conn = mysql.connector.connect(use_pure=True, **self.dbinfo)
+        except Exception as err:
+            print("❌ MySQL 연결 중 예외 발생:")
+            import traceback
+            traceback.print_exc()
+            from tkinter import messagebox
+            messagebox.showerror("DB 연결 실패", str(err))
+            raise
+
         self.cursor = self.conn.cursor()
         self.cursor.execute("SELECT DATABASE();")
         print(self.cursor.fetchone())
@@ -267,7 +279,7 @@ class Todo:
             return
         current_id = self.listbox_task_ids[idx]
         above_id = self.listbox_task_ids[idx - 1]
-        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s", (current_id,))
+        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=", (current_id,))
         order1 = self.cursor.fetchone()[0]
         self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s", (above_id,))
         order2 = self.cursor.fetchone()[0]
@@ -287,12 +299,12 @@ class Todo:
             return
         current_id = self.listbox_task_ids[idx]
         below_id = self.listbox_task_ids[idx + 1]
-        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s", (current_id,))
+        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=?", (current_id,))
         order1 = self.cursor.fetchone()[0]
-        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s", (below_id,))
+        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=?", (below_id,))
         order2 = self.cursor.fetchone()[0]
-        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (order2, current_id))
-        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (order1, below_id))
+        self.cursor.execute("UPDATE todolists SET sort_order=? WHERE id=?", (order2, current_id))
+        self.cursor.execute("UPDATE todolists SET sort_order=? WHERE id=?", (order1, below_id))
         self.conn.commit()
         self.display_tasks()
         self.task_listbox.selection_clear(0, tk.END)
@@ -302,7 +314,7 @@ class Todo:
         self.cursor.execute("SELECT id FROM todolists ORDER BY sort_order ASC, id ASC")
         rows = self.cursor.fetchall()
         for i, (row_id,) in enumerate(rows):
-            self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (i, row_id))
+            self.cursor.execute("UPDATE todolists SET sort_order=? WHERE id=?", (i, row_id))
         self.conn.commit()
 
     def _ensure_sort_order(self):
@@ -323,4 +335,6 @@ if __name__ == '__main__':
         app = Todo(root)
         root.mainloop()
     except Exception as e:
+        print(f"앱 실행 중 오류 발생: {e}")
+        traceback.print_exc()
         sys.exit(1)
