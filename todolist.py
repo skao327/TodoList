@@ -41,7 +41,8 @@ class Todo:
                 task VARCHAR(255) NOT NULL,
                 completed TINYINT(1) NOT NULL DEFAULT 0,
                 sort_order INT NOT NULL DEFAULT 0,
-                due_date DATE DEFAULT NULL
+                due_date DATE DEFAULT NULL,
+                priority TINYINT NOT NULL DEFAULT 5
             )
         """)
 
@@ -65,6 +66,15 @@ class Todo:
         self.task_entry.pack(pady=(15,5))
         self.task_entry.bind("<Return>", self.add_task)
         
+        input_priority_frame = tk.Frame(input_outer_frame)
+        input_priority_frame.pack(pady=2)
+        tk.Label(input_priority_frame, text="우선순위 (0=가장높음, 5=낮음): ").pack(side=tk.LEFT, padx=(0,5))
+        self.priority_entry = tk.Entry(input_priority_frame, width=5)
+        self.priority_entry.pack(side=tk.LEFT)
+        self.priority_entry.insert(0, "5")  # 기본 우선순위
+        self.priority_entry.bind("<Return>", self.add_task)
+
+
         input_due_date_frame = tk.Frame(input_outer_frame)
         input_due_date_frame.pack(pady=2)
         tk.Label(input_due_date_frame, text="마감기한(YYYY-MM-DD): ").pack(side=tk.LEFT, padx=(0,5))
@@ -109,14 +119,15 @@ class Todo:
         self.task_listbox.delete(0, tk.END)
         self.listbox_task_ids.clear()
         try:
-            self.cursor.execute("SELECT id, task, completed, due_date FROM todolists ORDER BY completed ASC, CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, id ASC")
+            self.cursor.execute("SELECT id, task, completed, due_date, priority FROM todolists ORDER BY completed ASC, CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, id ASC")
             for row in self.cursor.fetchall():
-                task_id, task_text, completed_status, due_date = row
+                task_id, task_text, completed_status, due_date, priority = row
                 prefix = self.CHECKED if completed_status else self.UNCHECKED
                 due_date_str = ""
                 if due_date:
                     due_date_str = f"(기한: {due_date.strftime('%Y-%m-%d')})"
-                display_text = f"{prefix} {task_text} {due_date_str}"
+                display_text = f"{prefix} {task_text} [우선순위:{priority}] {due_date_str}"
+
                 self.task_listbox.insert(tk.END, display_text)
                 self.listbox_task_ids.append(task_id)
                 if completed_status:
@@ -147,6 +158,15 @@ class Todo:
     def add_task(self, event=None):
         task = self.task_entry.get()
         due_date_str = self.due_date_entry.get()
+        priority_str = self.priority_entry.get()
+        try:
+            priority = int(priority_str)
+            if not (0 <= priority <= 5):
+                raise ValueError()
+        except ValueError:
+            messagebox.showwarning("경고", "우선순위는 0~5 사이의 정수로 입력해주세요.")
+            return
+
         if not task:
             messagebox.showwarning("경고", "할 일을 입력해주세요.")
             return
@@ -160,7 +180,7 @@ class Todo:
         try:
             self.cursor.execute("SELECT IFNULL(MAX(sort_order), 0) FROM todolists")
             max_order = self.cursor.fetchone()[0]
-            self.cursor.execute("INSERT INTO todolists (task, sort_order, due_date) VALUES (%s, %s, %s)", (task, max_order + 1, due_date_obj))
+            self.cursor.execute("INSERT INTO todolists (task, sort_order, due_date, priority) VALUES (%s, %s, %s, %s)", (task, max_order + 1, due_date_obj, priority))
             self.conn.commit()
             print(f"할 일 추가: {task}, 마감기한: {due_date_obj}")
             self.task_entry.delete(0, tk.END)
