@@ -1,7 +1,9 @@
 import tkinter as tk
 import mysql.connector
 from tkinter import messagebox, simpledialog
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
+import threading
+import time
 import traceback
 import sys
 
@@ -41,16 +43,18 @@ class Todo:
                 task VARCHAR(255) NOT NULL,
                 completed TINYINT(1) NOT NULL DEFAULT 0,
                 sort_order INT NOT NULL DEFAULT 0,
-                due_date DATE DEFAULT NULL
+                due_date DATE DEFAULT NULL,
+                reminder TINYINT(1) NOT NULL DEFAULT 0
             )
         """)
-
+        
         self.listbox_task_ids = []
         self.deleted_item_stack = []
 
         self.setup_gui()
         self._ensure_sort_order()
         self.display_tasks()
+        self.start_reminder_check_thread()
         root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def setup_gui(self):
@@ -85,7 +89,7 @@ class Todo:
         self.refresh_button = tk.Button(button_frame, text="새로고침", width=8, command=self.force_refresh)
         self.refresh_button.pack(side=tk.LEFT, padx=2)
 
-        # 버튼 2줄: 순서 이동 + 마감기한 설정
+        # 버튼 2줄: 순서 이동 + 마감기한 설정 + 알림림
         button_frame2 = tk.Frame(self.root)
         button_frame2.pack(pady=3)
         self.up_button = tk.Button(button_frame2, text="↑ 위로", width=8, command=self.move_up)
@@ -94,6 +98,8 @@ class Todo:
         self.down_button.pack(side=tk.LEFT, padx=2)
         self.set_due_date_button = tk.Button(button_frame2, text="기한변경", width=8, command=self.set_due_date_for_selected)
         self.set_due_date_button.pack(side=tk.LEFT, padx=2)
+        self.toggle_reminder_button = tk.Button(button_frame2, text="알림설정", width=8, command=self.toggle_reminder_for_selected)
+        self.toggle_reminder_button.pack(side=tk.LEFT, padx=2)
 
         # 리스트박스
         list_frame = tk.Frame(self.root)
@@ -109,14 +115,15 @@ class Todo:
         self.task_listbox.delete(0, tk.END)
         self.listbox_task_ids.clear()
         try:
-            self.cursor.execute("SELECT id, task, completed, due_date FROM todolists ORDER BY completed ASC, CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, id ASC")
-            for row in self.cursor.fetchall():
-                task_id, task_text, completed_status, due_date = row
+            self.cursor.execute("SELECT id, task, completed, due_date, reminder FROM todolists ORDER BY completed ASC, CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, id ASC")
+            for row_index, row in enumerate(self.cursor.fetchall()):
+                task_id, task_text, completed_status, due_date, reminder = row
                 prefix = self.CHECKED if completed_status else self.UNCHECKED
                 due_date_str = ""
                 if due_date:
                     due_date_str = f"(기한: {due_date.strftime('%Y-%m-%d')})"
-                display_text = f"{prefix} {task_text} {due_date_str}"
+                reminder_icon = " 🔔" if reminder and not completed_status else ""
+                display_text = f"{prefix} {task_text} {due_date_str} {reminder_icon}"
                 self.task_listbox.insert(tk.END, display_text)
                 self.listbox_task_ids.append(task_id)
                 if completed_status:
@@ -220,7 +227,7 @@ class Todo:
             for index in sorted(selected_indices, reverse=True):
                 task_id = self.listbox_task_ids[index]
                 try:
-                    self.cursor.execute("SELECT id, task, completed, sort_order, due_date FROM todolists WHERE id=%s", (task_id,))
+                    self.cursor.execute("SELECT id, task, completed, sort_order, due_date, reminder FROM todolists WHERE id=%s", (task_id,))
                     deleted_row = self.cursor.fetchone()
                     if deleted_row:
                         self.deleted_item_stack.append(deleted_row)
@@ -240,7 +247,7 @@ class Todo:
             try:
                 self.cursor.execute("SELECT IFNULL(MAX(sort_order), 0) FROM todolists")
                 max_order = self.cursor.fetchone()[0]
-                self.cursor.execute("INSERT INTO todolists (task, completed, sort_order, due_date) VALUES (%s, %s, %s, %s)", (task, completed, max_order + 1, due_date))
+                self.cursor.execute("INSERT INTO todolists (task, completed, sort_order, due_date, reminder) VALUES (%s, %s, %s, %s)", (task, completed, max_order + 1, due_date))
                 self.conn.commit()
                 self.display_tasks()
             except mysql.connector.Error as e:
@@ -248,6 +255,76 @@ class Todo:
         else:
             messagebox.showinfo("안내", "복구할 항목이 없습니다.")
 
+    def toggle_reminder_for_selected(self):
+        selected_indices = self.task_listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("경고", "알림 설정을 변경할 항목을 선택해주세요.")
+            return
+        try:
+            for index in selected_indices:
+                task_id = self.listbox_task_ids[index]
+                self.cursor.execute("SELECT reminder FROM todolists WHERE id = %s", (task_id,))
+                result = self.cursor.fetchone()
+                if result:
+                    current_reminder_status = result[0]
+                    new_reminder_status = 0 if current_reminder_status else 1
+                    self.cursor.execute("UPDATE todolists SET reminder = %s WHERE id = %s", (new_reminder_status, task_id))
+            self.conn.commit()
+            self.display_tasks()
+        except mysql.connector.Error as e:
+            messagebox.showerror("DB 오류", f"알림 설정 변경 중 오류 발생: {e}")
+
+    def check_reminders(self):
+        #마감기한 내일인 항목 중 알림 설정 된 것 찾아 알림
+        while not self.stop_reminder_thread_flag.is_set():
+            try:
+                if not self.conn or not self.conn.is_connected():
+                    print("알림 스레드: DB 연결이 끊어져 재연결 시도")
+                    try:
+                        print("try진입")
+                        self.conn = mysql.connector.connect(**self.dbinfo)
+                        print("알림 스레드: DB 재연결 성공")
+                    except mysql.connector.Error as db_err:
+                        print(f"알림 스레드: DB 재연결 실패-{db_err}")
+                        time.sleep(60)
+                        continue
+                current_date = date.today()
+                tomorrow = date.today() + timedelta(days=1)
+                query = """
+                    SELECT task, due_date FROM todolists
+                    WHERE completed = 0 AND reminder = 1 AND due_date = %s
+                """
+                with self.conn.cursor(dictionary=True) as dict_cursor:
+                    dict_cursor.execute(query, (tomorrow,))
+                    reminders_for_tomorrow = dict_cursor.fetchall()
+                if reminders_for_tomorrow:
+                    print(f"알림대상 {len(reminders_for_tomorrow)}개")
+                    for task_info in reminders_for_tomorrow:
+                        self.root.after(0, self.show_reminder_message, task_info['task'], task_info['due_date'])
+            except mysql.connector.Error as e:
+                print(f"알림 확인 중 DB 오류: {e}")
+                for _ in range(60):
+                    if self.stop_reminder_thread_flag.is_set(): break
+                    time.sleep(1)
+            except Exception as e_global:
+                print(f"알림 스레드에서 예기치 않은 오류 발생: {e_global}")
+                for _ in range(60):
+                    if self.stop_reminder_thread_flag.is_set(): break
+                    time.sleep(1)
+                    
+            for _ in range(3600):
+                if self.stop_reminder_thread_flag.is_set(): break
+                time.sleep(1)
+                
+    def show_reminder_message(self, task_name, due_date_val):
+        messagebox.showinfo("🔔 마감기한 알림", f"내일 ({due_date_val.strftime('%Y-%m-%d')}) 마감인 {task_name} 잊지 말고 완료하세요!")
+        
+    def start_reminder_check_thread(self):
+        self.stop_reminder_thread_flag = threading.Event()
+        self.reminder_thread = threading.Thread(target=self.check_reminders, daemon=True)
+        self.reminder_thread.start()
+        print("알림 확인 스레드가 시작되었습니다.")
+                
     def toggle_complete(self, event=None):
         selected = self.task_listbox.curselection()
         if not selected:
