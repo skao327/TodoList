@@ -6,14 +6,60 @@ import threading
 import time
 import traceback
 import sys
+class LoginWindow:
+    def __init__(self, master, dbinfo):
+        self.master = master
+        self.dbinfo = dbinfo
+        self.user_id = None
+
+        master.title("로그인")
+        tk.Label(master, text="아이디:").grid(row=0, column=0)
+        tk.Label(master, text="비밀번호:").grid(row=1, column=0)
+        self.entry_username = tk.Entry(master)
+        self.entry_password = tk.Entry(master, show="*")
+        self.entry_username.grid(row=0, column=1)
+        self.entry_password.grid(row=1, column=1)
+        tk.Button(master, text="로그인", command=self.try_login).grid(row=2, column=0, columnspan=2)
+        tk.Button(master, text="회원가입", command=self.signup).grid(row=3, column=0, columnspan=2)
+
+    def try_login(self):
+        username = self.entry_username.get()
+        password = self.entry_password.get()
+        conn = mysql.connector.connect(**self.dbinfo)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE username=%s AND password=%s", (username, password))
+        row = cursor.fetchone()
+        if row:
+            self.user_id = row[0]
+            self.master.destroy()
+        else:
+            messagebox.showerror("로그인 실패", "아이디 또는 비밀번호가 틀렸습니다.")
+        conn.close()
+
+    def signup(self):
+        username = self.entry_username.get()
+        password = self.entry_password.get()
+        if not username or not password:
+            messagebox.showerror("회원가입 실패", "아이디와 비밀번호를 입력하세요.")
+            return
+        conn = mysql.connector.connect(**self.dbinfo)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, password))
+            conn.commit()
+            messagebox.showinfo("회원가입 성공", "회원가입이 완료되었습니다. 다시 로그인하세요.")
+        except mysql.connector.Error as e:
+            messagebox.showerror("회원가입 실패", f"에러: {e}")
+        conn.close()
 
 class Todo:
 
     UNCHECKED = "☐ "
     CHECKED = "☑ "
 
-    def __init__(self, root):
+    def __init__(self, root, user_id):
         self.root = root
+        self.user_id = user_id
         root.title("To-do List") #맨 위에 제목("To-do List")
         root.geometry("600x600") #사이즈 약간 넓게 조정
 
@@ -115,7 +161,7 @@ class Todo:
         self.task_listbox.delete(0, tk.END)
         self.listbox_task_ids.clear()
         try:
-            self.cursor.execute("SELECT id, task, completed, due_date, reminder FROM todolists ORDER BY completed ASC, CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, id ASC")
+            self.cursor.execute("SELECT id, task, completed, due_date, reminder FROM todolists WHERE user_id=%s ORDER BY completed ASC, CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, id ASC", (self.user_id,))
             for row_index, row in enumerate(self.cursor.fetchall()):
                 task_id, task_text, completed_status, due_date, reminder = row
                 prefix = self.CHECKED if completed_status else self.UNCHECKED
@@ -165,9 +211,9 @@ class Todo:
                 messagebox.showwarning("경고", "마감기한 형식이 잘못되었습니다. (YYYY-MM-DD)")
                 return
         try:
-            self.cursor.execute("SELECT IFNULL(MAX(sort_order), 0) FROM todolists")
+            self.cursor.execute("SELECT IFNULL(MAX(sort_order), 0) FROM todolists WHERE user_id = %s", (self.user_id,))
             max_order = self.cursor.fetchone()[0]
-            self.cursor.execute("INSERT INTO todolists (task, sort_order, due_date) VALUES (%s, %s, %s)", (task, max_order + 1, due_date_obj))
+            self.cursor.execute("INSERT INTO todolists (task, sort_order, due_date, user_id) VALUES (%s, %s, %s,%s)", (task, max_order + 1, due_date_obj, self.user_id))
             self.conn.commit()
             print(f"할 일 추가: {task}, 마감기한: {due_date_obj}")
             self.task_entry.delete(0, tk.END)
@@ -188,7 +234,7 @@ class Todo:
         task_id_to_get_current_due = self.listbox_task_ids[first_selected_idx]
         initial_due_date_str = ""
         try:
-            self.cursor.execute("SELECT due_date FROM todolists WHERE id = %s", (task_id_to_get_current_due,))
+            self.cursor.execute("SELECT due_date FROM todolists WHERE id = %s AND user_id = %s", (task_id_to_get_current_due, self.user_id))
             current_due_date_db = self.cursor.fetchone()
             if current_due_date_db and current_due_date_db[0]:
                 initial_due_date_str = current_due_date_db[0].strftime('%Y-%m-%d')
@@ -231,7 +277,7 @@ class Todo:
                     deleted_row = self.cursor.fetchone()
                     if deleted_row:
                         self.deleted_item_stack.append(deleted_row)
-                        self.cursor.execute("DELETE FROM todolists WHERE id=%s", (task_id,))
+                        self.cursor.execute("DELETE FROM todolists WHERE id=%s AND user_id=%s", (task_id,self.user_id))
                         self.conn.commit()
                 except mysql.connector.Error as e:
                     messagebox.showerror("DB 오류", f"할 일 삭제 중 오류 발생: {e}")
@@ -247,7 +293,7 @@ class Todo:
             try:
                 self.cursor.execute("SELECT IFNULL(MAX(sort_order), 0) FROM todolists")
                 max_order = self.cursor.fetchone()[0]
-                self.cursor.execute("INSERT INTO todolists (task, completed, sort_order, due_date, reminder) VALUES (%s, %s, %s, %s)", (task, completed, max_order + 1, due_date))
+                self.cursor.execute("INSERT INTO todolists (task, completed, sort_order, due_date, reminder, user_id) VALUES (%s, %s, %s, %s, %s, %s)", (task, completed, max_order + 1, due_date, self.user_id))
                 self.conn.commit()
                 self.display_tasks()
             except mysql.connector.Error as e:
@@ -354,12 +400,13 @@ class Todo:
             return
         current_id = self.listbox_task_ids[idx]
         above_id = self.listbox_task_ids[idx - 1]
-        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s", (current_id,))
+        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s AND user_id=%s", (current_id, self.user_id))
         order1 = self.cursor.fetchone()[0]
-        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s", (above_id,))
+        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s AND user_id=%s", (above_id, self.user_id))
         order2 = self.cursor.fetchone()[0]
-        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (order2, current_id))
-        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (order1, above_id))
+        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s AND user_id=%s", (order2, current_id, self.user_id))
+        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s AND user_id=%s", (order1, above_id, self.user_id))
+
         self.conn.commit()
         self.display_tasks()
         self.task_listbox.selection_clear(0, tk.END)
@@ -374,29 +421,41 @@ class Todo:
             return
         current_id = self.listbox_task_ids[idx]
         below_id = self.listbox_task_ids[idx + 1]
-        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s", (current_id,))
+        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s AND user_id=%s", (current_id, self.user_id))
         order1 = self.cursor.fetchone()[0]
-        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s", (below_id,))
+        self.cursor.execute("SELECT sort_order FROM todolists WHERE id=%s AND user_id=%s", (below_id, self.user_id))
         order2 = self.cursor.fetchone()[0]
-        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (order2, current_id))
-        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (order1, below_id))
+        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s AND user_id=%s", (order2, current_id, self.user_id))
+        self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s AND user_id=%s", (order1, below_id, self.user_id))
+
         self.conn.commit()
         self.display_tasks()
         self.task_listbox.selection_clear(0, tk.END)
         self.task_listbox.selection_set(idx + 1)
 
     def _reorder_sort_orders(self):
-        self.cursor.execute("SELECT id FROM todolists ORDER BY sort_order ASC, id ASC")
+        self.cursor.execute(
+            "SELECT id FROM todolists WHERE user_id=%s ORDER BY sort_order ASC, id ASC",
+            (self.user_id,)
+        )
         rows = self.cursor.fetchall()
         for i, (row_id,) in enumerate(rows):
-            self.cursor.execute("UPDATE todolists SET sort_order=%s WHERE id=%s", (i, row_id))
+            self.cursor.execute(
+            "UPDATE todolists SET sort_order=%s WHERE id=%s AND user_id=%s",
+                (i, row_id, self.user_id)
+        )
         self.conn.commit()
 
+
     def _ensure_sort_order(self):
-        self.cursor.execute("SELECT COUNT(*), SUM(sort_order) FROM todolists")
+        self.cursor.execute(
+        "SELECT COUNT(*), SUM(sort_order) FROM todolists WHERE user_id=%s",
+        (self.user_id,)
+    )
         count, total = self.cursor.fetchone()
         if count > 1 and (total == 0 or total is None):
             self._reorder_sort_orders()
+
 
     def on_closing(self):
         if self.conn:
@@ -404,12 +463,24 @@ class Todo:
             print("DB 연결이 종료되었습니다.")
         self.root.destroy()
 
+
 if __name__ == '__main__':
-    root = tk.Tk()
-    try:
-        app = Todo(root)
-        root.mainloop()
-    except Exception as e:
-        print(f"앱 실행 중 오류 발생 : {e}")
-        traceback.print_exc()
-        sys.exit(1)
+    dbinfo = dict(
+        host="34.27.84.32",
+        user="todo_user",
+        password="mypass123",
+        database="todo_db"
+    )
+    login_root = tk.Tk()
+    login = LoginWindow(login_root, dbinfo)
+    login_root.mainloop()
+
+    if login.user_id:
+        root = tk.Tk()
+        try:
+            app = Todo(root, login.user_id)
+            root.mainloop()
+        except Exception as e:
+            print(f"앱 실행 중 오류 발생 : {e}")
+            traceback.print_exc()
+            sys.exit(1)
