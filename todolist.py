@@ -157,6 +157,13 @@ class Todo:
         scrollbar.pack(side=tk.RIGHT, fill="y", in_=list_frame)
         self.task_listbox.pack(side=tk.LEFT, fill="both", expand=True, in_=list_frame)
 
+        # 친구 기능 버튼 프레임 추가
+        friend_frame = tk.Frame(self.root)
+        friend_frame.pack(pady=3)
+        tk.Button(friend_frame, text="친구 요청", width=10, command=self.send_friend_request).pack(side=tk.LEFT, padx=2)
+        tk.Button(friend_frame, text="받은 요청확인", width=12, command=self.show_friend_requests).pack(side=tk.LEFT, padx=2)
+        tk.Button(friend_frame, text="친구 할일보기", width=12, command=self.show_friend_todos).pack(side=tk.LEFT, padx=2)
+
     def display_tasks(self):
         self.task_listbox.delete(0, tk.END)
         self.listbox_task_ids.clear()
@@ -462,6 +469,108 @@ class Todo:
             self.conn.close()
             print("DB 연결이 종료되었습니다.")
         self.root.destroy()
+    def send_friend_request(self):
+        target_username = simpledialog.askstring("친구 요청", "친구로 추가할 사용자의 아이디를 입력하세요.")
+        if not target_username:
+            return
+        if target_username == self.get_my_username():
+            messagebox.showerror("오류", "자기 자신에게는 요청할 수 없습니다.")
+            return
+        self.cursor.execute("SELECT id FROM users WHERE username=%s", (target_username,))
+        row = self.cursor.fetchone()
+        if not row:
+            messagebox.showerror("오류", "존재하지 않는 사용자입니다.")
+            return
+        target_id = row[0]
+        # 이미 친구인지 체크
+        self.cursor.execute(
+            "SELECT 1 FROM friend WHERE (user_id=%s AND friend_id=%s) OR (user_id=%s AND friend_id=%s)",
+            (self.user_id, target_id, target_id, self.user_id)
+        )
+        if self.cursor.fetchone():
+            messagebox.showinfo("안내", "이미 친구입니다.")
+            return
+        # 이미 요청했는지 체크
+        self.cursor.execute(
+            "SELECT 1 FROM friendships WHERE requester_id=%s AND receiver_id=%s AND status='pending'",
+            (self.user_id, target_id)
+        )
+        if self.cursor.fetchone():
+            messagebox.showinfo("안내", "이미 요청을 보냈습니다.")
+            return
+        # 요청 보내기
+        self.cursor.execute(
+            "INSERT INTO friendships (requester_id, receiver_id, status) VALUES (%s, %s, 'pending')",
+            (self.user_id, target_id)
+        )
+        self.conn.commit()
+        messagebox.showinfo("성공", f"{target_username}님에게 친구 요청을 보냈습니다.")
+    def get_my_username(self):
+        self.cursor.execute("SELECT username FROM users WHERE id=%s", (self.user_id,))
+        return self.cursor.fetchone()[0]
+    def show_friend_requests(self):
+        self.cursor.execute(
+            "SELECT f.id, u.username FROM friendships f JOIN users u ON f.requester_id=u.id WHERE f.receiver_id=%s AND f.status='pending'",
+            (self.user_id,)
+        )
+        requests = self.cursor.fetchall()
+        if not requests:
+            messagebox.showinfo("알림", "받은 친구 요청이 없습니다.")
+            return
+        req_list = [f"{req_id}: {uname}" for req_id, uname in requests]
+        selected = simpledialog.askstring("친구 요청 수락/거절", "수락할 요청 번호를 입력하세요:\n" + "\n".join(req_list))
+        if not selected:
+            return
+        try:
+            req_id = int(selected)
+        except:
+            messagebox.showerror("오류", "잘못된 번호입니다.")
+            return
+        # 수락/거절 선택
+        action = messagebox.askyesno("친구 요청", "수락하시겠습니까? (아니오=거절)")
+        if action:
+            # 수락
+            self.cursor.execute("SELECT requester_id FROM friendships WHERE id=%s", (req_id,))
+            row = self.cursor.fetchone()
+            if not row:
+                messagebox.showerror("오류", "존재하지 않는 요청입니다.")
+                return
+            requester_id = row[0]
+            self.cursor.execute("UPDATE friendships SET status='accepted' WHERE id=%s", (req_id,))
+            self.cursor.execute("INSERT INTO friend (user_id, friend_id) VALUES (%s, %s), (%s, %s)",
+                                (self.user_id, requester_id, requester_id, self.user_id))
+            self.conn.commit()
+            messagebox.showinfo("성공", "친구 요청을 수락했습니다.")
+        else:
+            self.cursor.execute("UPDATE friendships SET status='rejected' WHERE id=%s", (req_id,))
+            self.conn.commit()
+            messagebox.showinfo("완료", "친구 요청을 거절했습니다.")
+    
+    def show_friend_todos(self):
+        self.cursor.execute(
+            "SELECT u.id, u.username FROM friend f JOIN users u ON f.friend_id=u.id WHERE f.user_id=%s",
+            (self.user_id,)
+        )
+        friends = self.cursor.fetchall()
+        if not friends:
+            messagebox.showinfo("알림", "등록된 친구가 없습니다.")
+            return
+        friend_map = {str(idx+1): (fid, uname) for idx, (fid, uname) in enumerate(friends)}
+        friend_list = [f"{idx}: {uname}" for idx, (fid, uname) in enumerate(friends, 1)]
+        selected = simpledialog.askstring("친구 할일 보기", "확인할 친구 번호를 입력하세요:\n" + "\n".join(friend_list))
+        if not selected or selected not in friend_map:
+            return
+        friend_id, friend_name = friend_map[selected]
+        self.cursor.execute(
+            "SELECT task, completed, due_date FROM todolists WHERE user_id=%s ORDER BY completed ASC, due_date ASC, id ASC",
+            (friend_id,)
+        )
+        todos = self.cursor.fetchall()
+        if not todos:
+            messagebox.showinfo("친구 할일", f"{friend_name}님의 할 일이 없습니다.")
+            return
+        msg = "\n".join([f"{'☑' if c else '☐'} {t} {(f'(기한:{d})' if d else '')}" for t, c, d in todos])
+        messagebox.showinfo("친구 할일", f"{friend_name}님의 할 일 목록:\n\n{msg}")
 
 
 if __name__ == '__main__':
