@@ -296,11 +296,11 @@ class Todo:
     def undo_delete(self):
         if self.deleted_item_stack:
             last_deleted = self.deleted_item_stack.pop()
-            _, task, completed, _, due_date = last_deleted
+            _, task, completed, _, due_date, reminder_stauts = last_deleted
             try:
                 self.cursor.execute("SELECT IFNULL(MAX(sort_order), 0) FROM todolists")
                 max_order = self.cursor.fetchone()[0]
-                self.cursor.execute("INSERT INTO todolists (task, completed, sort_order, due_date, reminder, user_id) VALUES (%s, %s, %s, %s, %s, %s)", (task, completed, max_order + 1, due_date, self.user_id))
+                self.cursor.execute("INSERT INTO todolists (task, completed, sort_order, due_date, reminder, user_id) VALUES (%s, %s, %s, %s, %s, %s)", (task, completed, max_order + 1, due_date, reminder_stauts, self.user_id))
                 self.conn.commit()
                 self.display_tasks()
             except mysql.connector.Error as e:
