@@ -168,7 +168,7 @@ class Todo:
         self.task_listbox.delete(0, tk.END)
         self.listbox_task_ids.clear()
         try:
-            self.cursor.execute("SELECT id, task, completed, due_date, reminder FROM todolists WHERE user_id=%s ORDER BY sort_order ASC, id ASC",(self.user_id,))
+            self.cursor.execute("SELECT id, task, completed, due_date, reminder FROM todolists WHERE user_id=%s ORDER BY completed ASC, sort_order ASC, id ASC",(self.user_id,))
             for row_index, row in enumerate(self.cursor.fetchall()):
                 task_id, task_text, completed_status, due_date, reminder = row
                 prefix = self.CHECKED if completed_status else self.UNCHECKED
@@ -345,10 +345,10 @@ class Todo:
                 tomorrow = date.today() + timedelta(days=1)
                 query = """
                     SELECT task, due_date FROM todolists
-                    WHERE completed = 0 AND reminder = 1 AND due_date = %s
+                    WHERE completed = 0 AND reminder = 1 AND due_date = %s AND user_id = %s
                 """
                 with self.conn.cursor(dictionary=True) as dict_cursor:
-                    dict_cursor.execute(query, (tomorrow,))
+                    dict_cursor.execute(query, (tomorrow, self.user_id))
                     reminders_for_tomorrow = dict_cursor.fetchall()
                 if reminders_for_tomorrow:
                     print(f"알림대상 {len(reminders_for_tomorrow)}개")
