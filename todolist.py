@@ -168,7 +168,7 @@ class Todo:
         self.task_listbox.delete(0, tk.END)
         self.listbox_task_ids.clear()
         try:
-            self.cursor.execute("SELECT id, task, completed, due_date, reminder FROM todolists WHERE user_id=%s ORDER BY completed ASC, CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, id ASC", (self.user_id,))
+            self.cursor.execute("SELECT id, task, completed, due_date, reminder FROM todolists WHERE user_id=%s ORDER BY sort_order ASC, id ASC",(self.user_id,))
             for row_index, row in enumerate(self.cursor.fetchall()):
                 task_id, task_text, completed_status, due_date, reminder = row
                 prefix = self.CHECKED if completed_status else self.UNCHECKED
