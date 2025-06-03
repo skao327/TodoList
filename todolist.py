@@ -184,8 +184,8 @@ class Todo:
                 elif due_date:
                     today = date.today()
                     if due_date < today:
-                        self.task_listbox.itemconfig(tk.END, {'fg': 'darkred'})
                         display_text += "   (기한 지남)"
+                        self.task_listbox.itemconfig(tk.END, {'fg': 'darkred'})
                     elif due_date == today:
                         self.task_listbox.itemconfig(tk.END, {'fg': 'red'})
                 else:
